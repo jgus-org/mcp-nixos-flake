@@ -1,0 +1,340 @@
+diff --git a/mcp_nixos/__init__.py b/mcp_nixos/__init__.py
+index 07b8055..8192384 100644
+--- a/mcp_nixos/__init__.py
++++ b/mcp_nixos/__init__.py
+@@ -5,21 +5,10 @@ This package provides MCP resources and tools for interacting with NixOS package
+ system options, Home Manager configuration options, and nix-darwin macOS configuration options.
+ """
+ 
+-import os
+ import tomllib
+ from importlib.metadata import PackageNotFoundError, version
+ from pathlib import Path
+ 
+-# Sidestep an upstream crash: fastmcp's top-level import constructs a
+-# pydantic-settings `Settings()`, which eagerly reads `.env` from the caller's
+-# CWD via python-dotenv. A non-UTF-8 `.env` (git-crypt ciphertext, sops-
+-# encrypted dotenv, any binary blob) takes the whole server down with a
+-# UnicodeDecodeError *before* the MCP stdio handshake ever runs — the client
+-# just sees mcp-nixos fail to start. We don't read any FASTMCP_* settings from
+-# `.env`, so neutralising the lookup is safe. Respect an explicit override.
+-# See issue #144 and https://github.com/jlowin/fastmcp (fastmcp/__init__.py).
+-os.environ.setdefault("FASTMCP_ENV_FILE", os.devnull)
+-
+ try:
+     __version__ = version("mcp-nixos")
+ except PackageNotFoundError:
+diff --git a/mcp_nixos/server.py b/mcp_nixos/server.py
+index 31439da..8b5f567 100644
+--- a/mcp_nixos/server.py
++++ b/mcp_nixos/server.py
+@@ -17,7 +17,8 @@ import re
+ import sys
+ from typing import Annotated, Any
+ 
+-from fastmcp import FastMCP
++from mcp.server.mcpserver import MCPServer
++from pydantic import Field
+ 
+ from . import __version__
+ 
+@@ -184,7 +185,7 @@ _SERVER_INSTRUCTIONS = (
+     '  "which commit shipped X version Y?"  → nix_versions {"package":"X","version":"Y"}\n'
+ )
+ 
+-mcp = FastMCP("mcp-nixos", version=__version__, instructions=_SERVER_INSTRUCTIONS)
++mcp = MCPServer("mcp-nixos", version=__version__, instructions=_SERVER_INSTRUCTIONS)
+ 
+ 
+ _TRUE_TOKENS = {"1", "true", "yes", "y", "on"}
+@@ -212,36 +213,64 @@ def env_bool(name: str, default: bool = False) -> bool:
+ async def nix(
+     action: Annotated[
+         str,
+-        "One of: search, info, stats, browse, channels, flake-inputs, cache, store. "
+-        "Use 'search' for keyword lookup, 'info' for details about a specific name, "
+-        "'browse' to walk an option hierarchy by prefix (home-manager/darwin/nixvim/nvf/noogle only; "
+-        "'options' is accepted as a legacy alias). "
+-        "'store' reads files or lists directories at an explicit /nix/store/ path.",
++        Field(
++            description=(
++                "One of: search, info, stats, browse, channels, flake-inputs, cache, store. "
++                "Use 'search' for keyword lookup, 'info' for details about a specific name, "
++                "'browse' to walk an option hierarchy by prefix (home-manager/darwin/nixvim/nvf/noogle only; "
++                "'options' is accepted as a legacy alias). "
++                "'store' reads files or lists directories at an explicit /nix/store/ path."
++            )
++        ),
+     ],
+     query: Annotated[
+         str,
+-        "Search term for 'search', exact name for 'info', prefix path for 'browse'. "
+-        "For flake-inputs: input_name or input:path. For store: absolute /nix/store/ path. "
+-        "Leave empty for 'stats'/'channels'.",
++        Field(
++            description=(
++                "Search term for 'search', exact name for 'info', prefix path for 'browse'. "
++                "For flake-inputs: input_name or input:path. For store: absolute /nix/store/ path. "
++                "Leave empty for 'stats'/'channels'."
++            )
++        ),
+     ] = "",
+     source: Annotated[
+         str,
+-        "Data source for search/info/stats/browse/cache. One of: nixos (default), "
+-        "home-manager, darwin, flakes, flakehub, nixvim, nvf, wiki, nix-dev, noogle, nixhub. "
+-        "For action=flake-inputs, this may instead be a path to a flake directory; "
+-        "omit/default to use the current project. Ignored by action=store.",
++        Field(
++            description=(
++                "Data source for search/info/stats/browse/cache. One of: nixos (default), "
++                "home-manager, darwin, flakes, flakehub, nixvim, nvf, wiki, nix-dev, noogle, nixhub. "
++                "For action=flake-inputs, this may instead be a path to a flake directory; "
++                "omit/default to use the current project. Ignored by action=store."
++            )
++        ),
+     ] = "nixos",
+     type: Annotated[
+         str,
+-        "Sub-type of query. For source=nixos with action=search, one of: "
+-        "packages, options, programs, flakes. For source=nixos with action=info, one of: "
+-        "package, option. For flake-inputs, one of: list, ls, read. For store, one of: "
+-        "ls, read. Ignored by most other sources.",
++        Field(
++            description=(
++                "Sub-type of query. For source=nixos with action=search, one of: "
++                "packages, options, programs, flakes. For source=nixos with action=info, one of: "
++                "package, option. For flake-inputs, one of: list, ls, read. For store, one of: "
++                "ls, read. Ignored by most other sources."
++            )
++        ),
+     ] = "packages",
+-    channel: Annotated[str, "NixOS channel: unstable (default), stable, or a release like 25.05."] = "unstable",
+-    limit: Annotated[int, "Max results. 1-100 (or 1-2000 for flake-inputs/store read)."] = 20,
+-    version: Annotated[str, "Only used by action=cache. Package version (default: latest)."] = "latest",
+-    system: Annotated[str, "Only used by action=cache. System arch e.g. x86_64-linux. Empty for all."] = "",
++    channel: Annotated[
++        str,
++        Field(description="NixOS channel: unstable (default), stable, or a release like 25.05."),
++    ] = "unstable",
++    limit: Annotated[
++        int,
++        Field(description="Max results. 1-100 (or 1-2000 for flake-inputs/store read)."),
++    ] = 20,
++    version: Annotated[
++        str,
++        Field(description="Only used by action=cache. Package version (default: latest)."),
++    ] = "latest",
++    system: Annotated[
++        str,
++        Field(description="Only used by action=cache. System arch e.g. x86_64-linux. Empty for all."),
++    ] = "",
+ ) -> str:
+     """Query NixOS, Home Manager, Darwin, FlakeHub, flakes, Nixvim, NVF, Wiki, nix.dev, Noogle, NixHub.
+ 
+@@ -503,9 +532,9 @@ async def nix(
+ 
+ @mcp.tool()
+ async def nix_versions(
+-    package: Annotated[str, "Package name"],
+-    version: Annotated[str, "Specific version to find"] = "",
+-    limit: Annotated[int, "1-50"] = 10,
++    package: Annotated[str, Field(description="Package name")],
++    version: Annotated[str, Field(description="Specific version to find")] = "",
++    limit: Annotated[int, Field(description="1-50")] = 10,
+ ) -> str:
+     """Get package version history from NixHub.io."""
+     if not package or not package.strip():
+@@ -616,7 +645,13 @@ def main() -> None:
+                 raise ValueError("MCP_NIXOS_PATH must not contain '//'")
+ 
+             stateless_http = env_bool("MCP_NIXOS_STATELESS_HTTP", default=False)
+-            mcp.run(transport="http", host=host, port=port, path=path, stateless_http=stateless_http)
++            mcp.run(
++                transport="streamable-http",
++                host=host,
++                port=port,
++                streamable_http_path=path,
++                stateless_http=stateless_http,
++            )
+         else:
+             raise ValueError("MCP_NIXOS_TRANSPORT must be one of: stdio, http")
+     except KeyboardInterrupt:
+diff --git a/pyproject.toml b/pyproject.toml
+index 11624da..8c1ee31 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -23,7 +23,8 @@ classifiers = [
+     # "Programming Language :: Python :: 3.14",
+ ]
+ dependencies = [
+-    "fastmcp>=4.0.0",
++    "mcp>=2.0.0",
++    "pydantic>=2.12.0",
+     "requests>=2.32.4",
+     "beautifulsoup4>=4.13.4",
+ ]
+diff --git a/tests/test_env_file_safety.py b/tests/test_env_file_safety.py
+index bea434a..436bc9e 100644
+--- a/tests/test_env_file_safety.py
++++ b/tests/test_env_file_safety.py
+@@ -2,13 +2,13 @@
+ Regression tests for issue #144: mcp-nixos must start even when the CWD
+ contains a non-UTF-8 `.env`.
+ 
+-fastmcp's top-level import eagerly constructs a pydantic-settings `Settings()`
+-which runs python-dotenv on `.env` in the process CWD. A binary / git-crypt
+-/ sops-encrypted dotenv file used to take the whole server down with a
+-UnicodeDecodeError before the MCP handshake ever ran. `mcp_nixos/__init__.py`
+-sets `FASTMCP_ENV_FILE=os.devnull` as a default to sidestep that path.
++A dependency that reads `.env` from the process CWD at import time used to take
++the whole server down with a UnicodeDecodeError before the MCP handshake ever
++ran. Nothing the server imports reads the CWD today; this keeps that property
++under test, because a dependency that started reading it at import time would
++reproduce the same client-visible failure.
+ 
+-These tests spawn fresh subprocesses so we're actually exercising import-time
++The test spawns a fresh subprocess so we are actually exercising import-time
+ behavior; importing mcp_nixos in the test runner's already-loaded process
+ doesn't exercise the crash.
+ """
+@@ -32,10 +32,6 @@ def _run_import_in(cwd: Path, env: dict[str, str] | None = None) -> subprocess.C
+     full_env = os.environ.copy()
+     # Let the subprocess find the in-tree mcp_nixos without install.
+     full_env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_ROOT), full_env.get("PYTHONPATH", "")]))
+-    # Strip any inherited FASTMCP_ENV_FILE so the regression tests exercise the
+-    # *default* path (mcp_nixos/__init__.py's setdefault). If the caller wants
+-    # to assert the explicit-override behavior, they pass it via `env`.
+-    full_env.pop("FASTMCP_ENV_FILE", None)
+     if env:
+         full_env.update(env)
+ 
+@@ -68,46 +64,3 @@ def test_startup_survives_non_utf8_dotenv(tmp_path: Path) -> None:
+     )
+     assert "OK" in result.stdout
+     assert "UnicodeDecodeError" not in result.stderr
+-
+-
+-def test_explicit_fastmcp_env_file_is_preserved(tmp_path: Path) -> None:
+-    """If the user sets FASTMCP_ENV_FILE explicitly, we must not clobber it."""
+-    valid_env = tmp_path / "custom.env"
+-    valid_env.write_text("SOME_FASTMCP_VAR=hello\n", encoding="utf-8")
+-
+-    result = subprocess.run(
+-        [
+-            sys.executable,
+-            "-c",
+-            "import os; import mcp_nixos; print(os.environ['FASTMCP_ENV_FILE'])",
+-        ],
+-        cwd=str(tmp_path),
+-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "FASTMCP_ENV_FILE": str(valid_env)},
+-        capture_output=True,
+-        text=True,
+-        timeout=30,
+-    )
+-    assert result.returncode == 0, f"stderr={result.stderr!r}"
+-    assert result.stdout.strip() == str(valid_env)
+-
+-
+-def test_default_fastmcp_env_file_points_to_devnull(tmp_path: Path) -> None:
+-    """Import mcp_nixos with no FASTMCP_ENV_FILE set; it should default to os.devnull."""
+-    env = {k: v for k, v in os.environ.items() if k != "FASTMCP_ENV_FILE"}
+-    env["PYTHONPATH"] = str(REPO_ROOT)
+-
+-    result = subprocess.run(
+-        [
+-            sys.executable,
+-            "-c",
+-            "import os; import mcp_nixos; print(os.environ['FASTMCP_ENV_FILE'])",
+-        ],
+-        cwd=str(tmp_path),
+-        env=env,
+-        capture_output=True,
+-        text=True,
+-        timeout=30,
+-    )
+-
+-    assert result.returncode == 0, f"stderr={result.stderr!r}"
+-    assert result.stdout.strip() == os.devnull
+diff --git a/tests/test_fastmcp_version.py b/tests/test_fastmcp_version.py
+index b75e35a..2854e26 100644
+--- a/tests/test_fastmcp_version.py
++++ b/tests/test_fastmcp_version.py
+@@ -1,10 +1,10 @@
+-"""Guard the FastMCP / MCP SDK generation the server is built against.
++"""Guard the MCP SDK generation the server is built against.
+ 
+-The ``fastmcp>=4.0.0`` floor in pyproject.toml and the Nix packaging in
+-nix/fastmcp4.nix exist so the server speaks MCP protocol revision 2026-07-28.
+-The rest of the unit suite passes identically on FastMCP 3 and 4, so without
+-this check a packaging regression that silently resolved FastMCP 3 would go
+-unnoticed by ``nix build`` and ``nix flake check``.
++The server is written against the official MCP Python SDK's high-level server,
++so a packaging regression that resolved an older SDK generation would break
++``mcp.server.mcpserver`` rather than the tools. The protocol-revision and
++starlette checks below travel with it: the HTTP transport serves through
++starlette, so its floor is ours to enforce even where the SDK asks for less.
+ """
+ 
+ from importlib.metadata import version
+@@ -15,9 +15,9 @@ from packaging.version import Version
+ 
+ 
+ @pytest.mark.unit
+-def test_fastmcp_major_version_is_at_least_4() -> None:
+-    major = int(version("fastmcp").split(".")[0])
+-    assert major >= 4, f"expected FastMCP >= 4, got {version('fastmcp')}"
++def test_mcp_sdk_major_version_is_at_least_2() -> None:
++    major = int(version("mcp").split(".")[0])
++    assert major >= 2, f"expected the MCP SDK >= 2, got {version('mcp')}"
+ 
+ 
+ @pytest.mark.unit
+@@ -26,8 +26,8 @@ def test_mcp_sdk_speaks_protocol_2026_07_28() -> None:
+ 
+ 
+ @pytest.mark.unit
+-def test_starlette_meets_fastmcp_security_floor() -> None:
+-    # fastmcp-slim 4 requires starlette >= 1.0.1 (CVE-2026-48710). The Nix
+-    # packaging relaxes wheel metadata, so re-check the floor here where it
+-    # fails `nix build` on any pin that resolves an older starlette.
++def test_starlette_meets_security_floor() -> None:
++    # starlette 1.0.1 carries the fix for CVE-2026-48710. Nix resolves the
++    # interpreter set, so re-check the floor here where it fails `nix build`
++    # on any pin that resolves an older starlette.
+     assert Version(version("starlette")) >= Version("1.0.1"), f"starlette {version('starlette')} is below 1.0.1"
+diff --git a/tests/test_main.py b/tests/test_main.py
+index 9262539..5378a79 100644
+--- a/tests/test_main.py
++++ b/tests/test_main.py
+@@ -107,7 +107,7 @@ class TestMainTransport:
+         mock_mcp.run.return_value = None
+         main()
+         mock_mcp.run.assert_called_once_with(
+-            transport="http", host="127.0.0.1", port=8000, path="/mcp", stateless_http=False
++            transport="streamable-http", host="127.0.0.1", port=8000, streamable_http_path="/mcp", stateless_http=False
+         )
+ 
+     @patch("mcp_nixos.server.mcp")
+@@ -125,7 +125,11 @@ class TestMainTransport:
+         mock_mcp.run.return_value = None
+         main()
+         mock_mcp.run.assert_called_once_with(
+-            transport="http", host="0.0.0.0", port=9090, path="/api/mcp", stateless_http=False
++            transport="streamable-http",
++            host="0.0.0.0",
++            port=9090,
++            streamable_http_path="/api/mcp",
++            stateless_http=False,
+         )
+ 
+     @patch("mcp_nixos.server.mcp")
+@@ -137,7 +141,7 @@ class TestMainTransport:
+         mock_mcp.run.return_value = None
+         main()
+         mock_mcp.run.assert_called_once_with(
+-            transport="http", host="127.0.0.1", port=8000, path="/mcp", stateless_http=True
++            transport="streamable-http", host="127.0.0.1", port=8000, streamable_http_path="/mcp", stateless_http=True
+         )
+ 
+     @patch.dict(os.environ, {"MCP_NIXOS_TRANSPORT": "grpc"})
