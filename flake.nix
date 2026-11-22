@@ -6,7 +6,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
       url = "github:jgus-org/flake-lib/v1";
     };
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
   outputs =
@@ -26,6 +26,7 @@
           ...
         }:
         rec {
+          default = mcp-nixos;
           mcp-nixos = buildApplication {
             build-system = [ python.hatchling ];
             dependencies = [
@@ -60,7 +61,6 @@
               "mcp_nixos.server"
             ];
           };
-          default = mcp-nixos;
         };
       updateBranches.minimumTrackingVersion = "3.1.0";
       upstream = {
